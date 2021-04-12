@@ -6,7 +6,6 @@ import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 import java.util.*;
 import java.util.logging.Logger;
-import javax.swing.text.html.Option;
 
 public class ClientLongSum {
 
@@ -42,7 +41,7 @@ public class ClientLongSum {
     * @throws IOException
     */
    private static Optional<Long> requestSumForList(SocketChannel sc, List<Long> list) throws IOException {
-      ByteBuffer buff = ByteBuffer.allocate(BUFFER_SIZE);
+      ByteBuffer buff = ByteBuffer.allocate(Long.BYTES);
       buff.putInt(list.size());
       sc.write(buff.flip());
       buff.clear();
@@ -50,17 +49,17 @@ public class ClientLongSum {
          sc.write(buff.putLong(operand).flip());
          buff.clear();
       }
-      readFully(sc, buff);
-      return Optional.of(buff.getLong());
+      if (!readFully(sc, buff)) {
+         return Optional.empty();
+      }
+      return Optional.of(buff.flip().getLong());
    }
 
    // Mettre un bytebuffer avec une taille 8 psk sinon readFully tout le temps
    static boolean readFully(SocketChannel sc, ByteBuffer bb) throws IOException {
       bb.clear();
       while (bb.hasRemaining()) {
-         int read = sc.read(bb);
-
-         if (read == -1) {
+         if (sc.read(bb) == -1) {
             return false;
          }
       }

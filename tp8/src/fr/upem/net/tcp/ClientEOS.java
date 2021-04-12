@@ -6,7 +6,6 @@ import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.Charset;
-import java.util.LinkedList;
 import java.util.logging.Logger;
 
 public class ClientEOS {
@@ -67,11 +66,11 @@ public class ClientEOS {
          sc.write(UTF8_CHARSET.encode(request));
          sc.shutdownOutput();
 
-         while(true) {
+         while (true) {
             if (!readFully(sc, buff)) {
                break;
-            } else if(!buff.hasRemaining()) {
-               var buff2 = ByteBuffer.allocate(buff.capacity() *2);
+            } else if (!buff.hasRemaining()) {
+               var buff2 = ByteBuffer.allocate(buff.capacity() * 2);
                buff2.put(buff);
                buff = buff2;
             }
@@ -89,10 +88,8 @@ public class ClientEOS {
     * @throws IOException
     */
    static boolean readFully(SocketChannel sc, ByteBuffer bb) throws IOException {
-      bb.clear();
       while (bb.hasRemaining()) {
-         int read = sc.read(bb);
-         if (read == -1) {
+         if (sc.read(bb) == -1) {
             return false;
          }
       }
@@ -101,8 +98,8 @@ public class ClientEOS {
 
    public static void main(String[] args) throws IOException {
       InetSocketAddress google = new InetSocketAddress("www.google.fr", 80);
-      System.out.println(getFixedSizeResponse("GET / HTTP/1.1\r\nHost: www.google.fr\r\n\r\n",
-            google,	512));
+//      System.out.println(getFixedSizeResponse("GET / HTTP/1.1\r\nHost: www.google.fr\r\n\r\n",
+//            google,	512));
       System.out.println(getUnboundedResponse("GET / HTTP/1.1\r\nHost: www.google.fr\r\n\r\n",
             google));
    }

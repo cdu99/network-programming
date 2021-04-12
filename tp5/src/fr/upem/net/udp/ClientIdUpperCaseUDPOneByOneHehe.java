@@ -16,12 +16,11 @@ import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public class ClientIdUpperCaseUDPOneByOneHehe {
 
-   private static Logger logger = Logger.getLogger(ClientIdUpperCaseUDPOneByOne.class.getName());
+   private static Logger logger = Logger.getLogger(ClientIdUpperCaseUDPOneByOneHehe.class.getName());
    private static final Charset UTF8 = StandardCharsets.UTF_8;
    private static final int BUFFER_SIZE = 1024;
    private final List<String> lines;
@@ -83,7 +82,7 @@ public class ClientIdUpperCaseUDPOneByOneHehe {
       //Read all lines of inFilename opened in UTF-8
       List<String> lines = Files.readAllLines(Paths.get(inFilename), UTF8);
       //Create client with the parameters and launch it
-      ClientIdUpperCaseUDPOneByOne client = new ClientIdUpperCaseUDPOneByOne(lines, timeout, serverAddress, outFilename);
+      ClientIdUpperCaseUDPOneByOneHehe client = new ClientIdUpperCaseUDPOneByOneHehe(lines, timeout, serverAddress, outFilename);
       client.launch();
 
    }
