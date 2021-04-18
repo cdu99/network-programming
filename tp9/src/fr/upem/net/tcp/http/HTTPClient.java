@@ -28,34 +28,46 @@ public class HTTPClient {
             + "Host: " + address + "\r\n"
             + "\r\n";
 
-      try (SocketChannel sc = SocketChannel.open()) {
-         sc.connect(new InetSocketAddress(address, 80));
-         sc.write(ASCII_CHARSET.encode(request));
-         ByteBuffer bb = ByteBuffer.allocate(BUFFER_SIZE);
-         HTTPReader reader = new HTTPReader(sc, bb);
-         var header = reader.readHeader();
-         var code = header.getCode();
-         if (code == 302 || code == 301) {
-            logger.info(header.toString());
-         }
-         if (!header.getContentType().equals("text/html") && !header.getContentType().equals("text/plain") ) {
-            logger.info("Not text/html or text/plain type");
-            return;
-         }
-         if (header.getContentLength() != -1) {
-            logger.info("Reading with Content-Length");
-            var contentLength = header.getContentLength();
-            var readBuff = reader.readBytes(contentLength);
-            System.out.println(ASCII_CHARSET.decode(readBuff.flip()));
-            return;
-         }
-         if (header.isChunkedTransfer()) {
-            logger.info("Reading in chunk");
-            var readBuff = reader.readChunks();
-            System.out.println(ASCII_CHARSET.decode(readBuff.flip()));
-         } else {
-            logger.info("Wrong address or resource");
-         }
+      SocketChannel sc = SocketChannel.open();
+      sc.connect(new InetSocketAddress(address, 80));
+      sc.write(ASCII_CHARSET.encode(request));
+      ByteBuffer bb = ByteBuffer.allocate(BUFFER_SIZE);
+      HTTPReader reader = new HTTPReader(sc, bb);
+      var header = reader.readHeader();
+      var code = header.getCode();
+      if (code == 302 || code == 301) {
+         var fields = header.getFields();
+         var url = new URL(fields.get("location"));
+         var newRequest = "GET " + url.getPath() + " HTTP/1.1\r\n"
+               + "Host: " + url.getHost() + "\r\n"
+               + "\r\n";
+         logger.info("Redirection to: " + url);
+         sc.close();
+         sc = SocketChannel.open();
+         sc.connect(new InetSocketAddress(url.getHost(), 80));
+         sc.write(ASCII_CHARSET.encode(newRequest));
+         reader = new HTTPReader(sc, bb);
+         header = reader.readHeader();
       }
+
+      if (!header.getContentType().equals("text/html") && !header.getContentType().equals("text/plain")) {
+         logger.info("Not text/html or text/plain type");
+         return;
+      }
+      if (header.getContentLength() != -1) {
+         logger.info("Reading with Content-Length");
+         var contentLength = header.getContentLength();
+         var readBuff = reader.readBytes(contentLength);
+         System.out.println(ASCII_CHARSET.decode(readBuff.flip()));
+         return;
+      }
+      if (header.isChunkedTransfer()) {
+         logger.info("Reading in chunk");
+         var readBuff = reader.readChunks();
+         System.out.println(ASCII_CHARSET.decode(readBuff.flip()));
+      } else {
+         logger.info("Wrong address or resource");
+      }
+      sc.close();
    }
 }
