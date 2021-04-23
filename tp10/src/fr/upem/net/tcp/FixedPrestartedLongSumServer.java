@@ -1,6 +1,7 @@
 package fr.upem.net.tcp;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.ServerSocketChannel;
@@ -12,16 +13,15 @@ import java.util.logging.Logger;
 public class FixedPrestartedLongSumServer {
 
    private static final Logger logger = Logger.getLogger(FixedPrestartedLongSumServer.class.getName());
-   private static final int BUFFER_SIZE = 1024;
    private final ServerSocketChannel serverSocketChannel;
-   private final Semaphore semaphore;
+   private final int maxClients;
 
-   public FixedPrestartedLongSumServer(int port) throws IOException {
+   public FixedPrestartedLongSumServer(int port, int maxClients) throws IOException {
       serverSocketChannel = ServerSocketChannel.open();
       serverSocketChannel.bind(new InetSocketAddress(port));
       logger.info(this.getClass().getName()
             + " starts on port " + port);
-      semaphore = new Semaphore(1);
+      this.maxClients = maxClients;
    }
 
    /**
@@ -32,29 +32,26 @@ public class FixedPrestartedLongSumServer {
 
    public void launch() throws IOException {
       logger.info("Server started");
-
-      while (!Thread.interrupted()) {
-         try {
-            semaphore.acquire();
-         } catch (InterruptedException e) {
-            logger.info("Server interrupted");
-            Thread.currentThread().interrupt();
-         }
-
-         SocketChannel client = serverSocketChannel.accept();
-
+      for (var i = 0; i < maxClients; i++) {
          new Thread(() -> {
-            try {
-               logger.info("Connection accepted from " + client.getRemoteAddress());
-               serve(client);
-            } catch (IOException ioe) {
-               logger.log(Level.INFO, "Connection terminated with client by IOException", ioe.getCause());
-            } finally {
-               semaphore.release();
-               silentlyClose(client);
+            while (!Thread.interrupted()) {
+               SocketChannel client = null;
+               try {
+                  client = serverSocketChannel.accept();
+               } catch (IOException e) {
+                  logger.info("Thread interrupted by IOException");
+                  Thread.currentThread().interrupt();
+               }
+               try {
+                  logger.info("Connection accepted from " + client.getRemoteAddress());
+                  serve(client);
+               } catch (IOException ioe) {
+                  logger.log(Level.INFO, "Connection terminated with client by IOException", ioe.getCause());
+               } finally {
+                  silentlyClose(client);
+               }
             }
          }).start();
-
       }
    }
 
@@ -122,9 +119,7 @@ public class FixedPrestartedLongSumServer {
    }
 
    public static void main(String[] args) throws NumberFormatException, IOException {
-      FixedPrestartedLongSumServer server = new FixedPrestartedLongSumServer(Integer.parseInt(args[0]));
+      FixedPrestartedLongSumServer server = new FixedPrestartedLongSumServer(Integer.parseInt(args[0]), Integer.parseInt(args[1]));
       server.launch();
    }
 }
-
-// L'OS met en attente les clients qui essayent de se connecter
