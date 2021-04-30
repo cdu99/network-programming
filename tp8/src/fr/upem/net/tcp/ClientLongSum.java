@@ -68,7 +68,36 @@ public class ClientLongSum {
 
    public static void main(String[] args) throws IOException {
       InetSocketAddress server = new InetSocketAddress(args[0], Integer.valueOf(args[1]));
+      new Thread(() -> {
+         try (SocketChannel sc = SocketChannel.open(server)) {
+            logger.info("LOCALALZLLAZ: "+sc.getLocalAddress());
+            logger.info("REMOOOOTE BABY: "+sc.getRemoteAddress());
+            for (int i = 0; i < 5; i++) {
+               ArrayList<Long> list = randomLongList(50);
+
+               Optional<Long> l = null;
+               try {
+                  l = requestSumForList(sc, list);
+               } catch (IOException e) {
+                  e.printStackTrace();
+               }
+               if (!l.isPresent()) {
+                  System.err.println("Connection with server lost.");
+                  return;
+               }
+               if (!checkSum(list, l.get())) {
+                  System.err.println("Oups! Something wrong happens!");
+               }
+            }
+            System.err.println("Everything seems ok");
+         } catch (IOException e) {
+            e.printStackTrace();
+         }
+      }).start();
+
       try (SocketChannel sc = SocketChannel.open(server)) {
+         logger.info("LOCALALZLLAZ: "+sc.getLocalAddress());
+         logger.info("REMOOOOTE BABY: "+sc.getRemoteAddress());
          for (int i = 0; i < 5; i++) {
             ArrayList<Long> list = randomLongList(50);
 
