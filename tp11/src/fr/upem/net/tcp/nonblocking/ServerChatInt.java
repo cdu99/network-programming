@@ -6,90 +6,107 @@ import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.*;
 import java.util.ArrayList;
+import java.util.LinkedList;
+import java.util.Queue;
 import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-public class ServerEcho {
+public class ServerChatInt {
 
    static private class Context {
+
       final private SelectionKey key;
       final private SocketChannel sc;
-      final private ByteBuffer bb = ByteBuffer.allocate(BUFFER_SIZE);
+      final private ByteBuffer bbin = ByteBuffer.allocate(BUFFER_SIZE);
+      final private ByteBuffer bbout = ByteBuffer.allocate(BUFFER_SIZE);
+      final private Queue<Integer> queue = new LinkedList<>();
+      final private ServerChatInt server;
+      final private IntReader messageReader = new IntReader();
       private boolean closed = false;
 
-      private Context(SelectionKey key) {
+      private Context(ServerChatInt server, SelectionKey key) {
          this.key = key;
          this.sc = (SocketChannel) key.channel();
+         this.server = server;
+      }
+
+      /**
+       * Process the content of bbin
+       * <p>
+       * The convention is that bbin is in write-mode before the call
+       * to process and after the call
+       */
+//      private void processIn() {
+//         bbin.flip();
+//         while (bbin.remaining() >= Integer.BYTES) {
+//            server.broadcast(bbin.getInt());
+//         }
+//         bbin.compact();
+//         updateInterestOps();
+//      }
+      private void processIn() {
+         for (; ; ) {
+            Reader.ProcessStatus status = messageReader.process(bbin);
+            switch (status) {
+               case DONE:
+                  Integer value = messageReader.get();
+                  server.broadcast(value);
+                  messageReader.reset();
+                  break;
+               case REFILL:
+                  return;
+               case ERROR:
+                  silentlyClose();
+                  return;
+            }
+         }
+      }
+
+      /**
+       * Add a message to the message queue, tries to fill bbOut and updateInterestOps
+       *
+       * @param msg
+       */
+      private void queueMessage(Integer msg) {
+         queue.add(msg);
+         processOut();
+      }
+
+      /**
+       * Try to fill bbout from the message queue
+       */
+      private void processOut() {
+         while (!queue.isEmpty()) {
+            bbout.putInt(queue.remove());
+         }
+         updateInterestOps();
       }
 
       /**
        * Update the interestOps of the key looking
        * only at values of the boolean closed and
-       * the ByteBuffer buff.
+       * of both ByteBuffers.
        * <p>
-       * The convention is that buff is in write-mode.
+       * The convention is that both buffers are in write-mode before the call
+       * to updateInterestOps and after the call.
+       * Also it is assumed that process has been be called just
+       * before updateInterestOps.
        */
+
       private void updateInterestOps() {
-         int newINterestOPs=0;
-         if (bb.hasRemaining()&&!closed){
-            newINterestOPs|=SelectionKey.OP_READ;
+         var newInterestOp = 0;
+         if (bbin.remaining() >= Integer.BYTES && !closed) {
+            newInterestOp |= SelectionKey.OP_READ;
          }
-         if (bb.position()!=0){
-            newINterestOPs|=SelectionKey.OP_WRITE;
+         if (bbout.position() > 0) {
+            newInterestOp |= SelectionKey.OP_WRITE;
          }
-         if (newINterestOPs==0){
-            silentlyClose();
-         } else {
-            key.interestOps(newINterestOPs);
-         }
-
-//         if (closed && bb.position() == 0) {
-//            silentlyClose();
-//         }
-//         if (closed && bb.position() != 0) {
-//            key.interestOps(SelectionKey.OP_WRITE);
-//         }
-//         if (bb.position() > BUFFER_SIZE / 2) {
-//            key.interestOps(SelectionKey.OP_WRITE);
-//         }
-//         if (bb.position() > 0){
-//            key.interestOps(SelectionKey.OP_READ | SelectionKey.OP_WRITE);
-//         } else {
-//            key.interestOps(SelectionKey.OP_READ);
-//         }
-      }
-
-      /**
-       * Performs the read action on sc
-       * <p>
-       * The convention is that buff is in write-mode before calling doRead
-       * and is in write-mode after calling doRead
-       *
-       * @throws IOException
-       */
-      private void doRead() throws IOException {
-         if (sc.read(bb) == -1) {
-            logger.info("Input stream closed");
+         if (newInterestOp == 0) {
             closed = true;
+         } else {
+            key.interestOps(newInterestOp);
          }
-
-         updateInterestOps();
-      }
-
-      /**
-       * Performs the write action on sc
-       * <p>
-       * The convention is that buff is in write-mode before calling doWrite
-       * and is in write-mode after calling doWrite
-       *
-       * @throws IOException
-       */
-      private void doWrite() throws IOException {
-         bb.flip();
-         sc.write(bb);
-         bb.compact();
-         updateInterestOps();
       }
 
       private void silentlyClose() {
@@ -99,15 +116,47 @@ public class ServerEcho {
             // ignore exception
          }
       }
+
+      /**
+       * Performs the read action on sc
+       * <p>
+       * The convention is that both buffers are in write-mode before the call
+       * to doRead and after the call
+       *
+       * @throws IOException
+       */
+      private void doRead() throws IOException {
+         if (sc.read(bbin) == -1) {
+            logger.info("Input stream closed");
+            closed = true;
+         }
+         processIn();
+      }
+
+      /**
+       * Performs the write action on sc
+       * <p>
+       * The convention is that both buffers are in write-mode before the call
+       * to doWrite and after the call
+       *
+       * @throws IOException
+       */
+
+      private void doWrite() throws IOException {
+         bbout.flip();
+         sc.write(bbout);
+         bbout.compact();
+         processOut();
+      }
    }
 
    static private int BUFFER_SIZE = 1_024;
-   static private Logger logger = Logger.getLogger(ServerEcho.class.getName());
+   static private Logger logger = Logger.getLogger(ServerChatInt.class.getName());
 
    private final ServerSocketChannel serverSocketChannel;
    private final Selector selector;
 
-   public ServerEcho(int port) throws IOException {
+   public ServerChatInt(int port) throws IOException {
       serverSocketChannel = ServerSocketChannel.open();
       serverSocketChannel.bind(new InetSocketAddress(port));
       selector = Selector.open();
@@ -159,7 +208,7 @@ public class ServerEcho {
       }
       sc.configureBlocking(false);
       var clientKey = sc.register(selector, SelectionKey.OP_READ);
-      clientKey.attach(new Context(clientKey));
+      clientKey.attach(new Context(this, clientKey));
    }
 
    private void silentlyClose(SelectionKey key) {
@@ -171,16 +220,31 @@ public class ServerEcho {
       }
    }
 
+   /**
+    * Add a message to all connected clients queue
+    *
+    * @param msg
+    */
+   private void broadcast(Integer msg) {
+      var keys = selector.keys();
+      for (var key : keys) {
+         if (key.interestOps() != SelectionKey.OP_ACCEPT) {
+            var context = (Context) key.attachment();
+            context.queueMessage(msg);
+         }
+      }
+   }
+
    public static void main(String[] args) throws NumberFormatException, IOException {
       if (args.length != 1) {
          usage();
          return;
       }
-      new ServerEcho(Integer.parseInt(args[0])).launch();
+      new ServerChatInt(Integer.parseInt(args[0])).launch();
    }
 
    private static void usage() {
-      System.out.println("Usage : ServerEcho port");
+      System.out.println("Usage : ServerSumBetter port");
    }
 
    /***

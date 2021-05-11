@@ -10,12 +10,13 @@ import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-public class ServerEcho {
-
+public class ServerSumBetter {
    static private class Context {
+
       final private SelectionKey key;
       final private SocketChannel sc;
-      final private ByteBuffer bb = ByteBuffer.allocate(BUFFER_SIZE);
+      final private ByteBuffer bbin = ByteBuffer.allocate(BUFFER_SIZE);
+      final private ByteBuffer bbout = ByteBuffer.allocate(BUFFER_SIZE);
       private boolean closed = false;
 
       private Context(SelectionKey key) {
@@ -24,72 +25,47 @@ public class ServerEcho {
       }
 
       /**
+       * Process the content of bbin into bbout
+       * <p>
+       * The convention is that both buffers are in write-mode before the call
+       * to process and after the call
+       */
+
+      private void process() {
+         bbin.flip();
+         while (bbin.remaining() >= 2 * Integer.BYTES && bbout.position() + Integer.BYTES <= bbout.capacity()) {
+            var op1 = bbin.getInt();
+            var op2 = bbin.getInt();
+            bbout.putInt(op1 + op2);
+         }
+
+         bbin.compact();
+      }
+
+      /**
        * Update the interestOps of the key looking
        * only at values of the boolean closed and
-       * the ByteBuffer buff.
+       * of both ByteBuffers.
        * <p>
-       * The convention is that buff is in write-mode.
+       * The convention is that both buffers are in write-mode before the call
+       * to updateInterestOps and after the call.
+       * Also it is assumed that process has been be called just
+       * before updateInterestOps.
        */
+
       private void updateInterestOps() {
-         int newINterestOPs=0;
-         if (bb.hasRemaining()&&!closed){
-            newINterestOPs|=SelectionKey.OP_READ;
+         var newInterestOp = 0;
+         if (bbin.hasRemaining() && !closed) {
+            newInterestOp |= SelectionKey.OP_READ;
          }
-         if (bb.position()!=0){
-            newINterestOPs|=SelectionKey.OP_WRITE;
+         if (bbout.position() != 0) {
+            newInterestOp |= SelectionKey.OP_WRITE;
          }
-         if (newINterestOPs==0){
+         if (newInterestOp == 0) {
             silentlyClose();
          } else {
-            key.interestOps(newINterestOPs);
+            key.interestOps(newInterestOp);
          }
-
-//         if (closed && bb.position() == 0) {
-//            silentlyClose();
-//         }
-//         if (closed && bb.position() != 0) {
-//            key.interestOps(SelectionKey.OP_WRITE);
-//         }
-//         if (bb.position() > BUFFER_SIZE / 2) {
-//            key.interestOps(SelectionKey.OP_WRITE);
-//         }
-//         if (bb.position() > 0){
-//            key.interestOps(SelectionKey.OP_READ | SelectionKey.OP_WRITE);
-//         } else {
-//            key.interestOps(SelectionKey.OP_READ);
-//         }
-      }
-
-      /**
-       * Performs the read action on sc
-       * <p>
-       * The convention is that buff is in write-mode before calling doRead
-       * and is in write-mode after calling doRead
-       *
-       * @throws IOException
-       */
-      private void doRead() throws IOException {
-         if (sc.read(bb) == -1) {
-            logger.info("Input stream closed");
-            closed = true;
-         }
-
-         updateInterestOps();
-      }
-
-      /**
-       * Performs the write action on sc
-       * <p>
-       * The convention is that buff is in write-mode before calling doWrite
-       * and is in write-mode after calling doWrite
-       *
-       * @throws IOException
-       */
-      private void doWrite() throws IOException {
-         bb.flip();
-         sc.write(bb);
-         bb.compact();
-         updateInterestOps();
       }
 
       private void silentlyClose() {
@@ -99,15 +75,51 @@ public class ServerEcho {
             // ignore exception
          }
       }
+
+      /**
+       * Performs the read action on sc
+       * <p>
+       * The convention is that both buffers are in write-mode before the call
+       * to doRead and after the call
+       *
+       * @throws IOException
+       */
+
+      private void doRead() throws IOException {
+         if (sc.read(bbin) == -1) {
+            logger.info("Input stream closed");
+            closed = true;
+         }
+         process();
+         updateInterestOps();
+      }
+
+      /**
+       * Performs the write action on sc
+       * <p>
+       * The convention is that both buffers are in write-mode before the call
+       * to doWrite and after the call
+       *
+       * @throws IOException
+       */
+
+      private void doWrite() throws IOException {
+         bbout.flip();
+         sc.write(bbout);
+         bbout.compact();
+         process();
+         updateInterestOps();
+      }
+
    }
 
-   static private int BUFFER_SIZE = 1_024;
-   static private Logger logger = Logger.getLogger(ServerEcho.class.getName());
+   static private int BUFFER_SIZE = 1024;
+   static private Logger logger = Logger.getLogger(ServerSumBetter.class.getName());
 
    private final ServerSocketChannel serverSocketChannel;
    private final Selector selector;
 
-   public ServerEcho(int port) throws IOException {
+   public ServerSumBetter(int port) throws IOException {
       serverSocketChannel = ServerSocketChannel.open();
       serverSocketChannel.bind(new InetSocketAddress(port));
       selector = Selector.open();
@@ -176,11 +188,11 @@ public class ServerEcho {
          usage();
          return;
       }
-      new ServerEcho(Integer.parseInt(args[0])).launch();
+      new ServerSumBetter(Integer.parseInt(args[0])).launch();
    }
 
    private static void usage() {
-      System.out.println("Usage : ServerEcho port");
+      System.out.println("Usage : ServerSumBetter port");
    }
 
    /***

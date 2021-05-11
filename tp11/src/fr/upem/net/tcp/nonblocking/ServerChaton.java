@@ -4,92 +4,115 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
-import java.nio.channels.*;
+import java.nio.channels.Channel;
+import java.nio.channels.SelectableChannel;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
+import java.util.LinkedList;
+import java.util.Queue;
 import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-public class ServerEcho {
+public class ServerChaton {
 
    static private class Context {
+
       final private SelectionKey key;
       final private SocketChannel sc;
-      final private ByteBuffer bb = ByteBuffer.allocate(BUFFER_SIZE);
+      final private ByteBuffer bbin = ByteBuffer.allocate(BUFFER_SIZE);
+      final private ByteBuffer bbout = ByteBuffer.allocate(BUFFER_SIZE);
+      private static final Charset UTF = Charset.forName("UTF-8");
+      final private Queue<Message> queue = new LinkedList<>();
+      final private ServerChaton server;
+      final private MessageReader messageReader = new MessageReader();
       private boolean closed = false;
 
-      private Context(SelectionKey key) {
+      private Context(ServerChaton server, SelectionKey key) {
          this.key = key;
          this.sc = (SocketChannel) key.channel();
+         this.server = server;
+      }
+
+      /**
+       * Process the content of bbin
+       * <p>
+       * The convention is that bbin is in write-mode before the call
+       * to process and after the call
+       */
+      private void processIn() {
+         for (; ; ) {
+            Reader.ProcessStatus status = messageReader.process(bbin);
+            switch (status) {
+               case DONE:
+                  Message value = messageReader.get();
+                  server.broadcast(value);
+                  messageReader.reset();
+                  break;
+               case REFILL:
+                  return;
+               case ERROR:
+                  silentlyClose();
+                  return;
+            }
+         }
+      }
+
+      /**
+       * Add a message to the message queue, tries to fill bbOut and updateInterestOps
+       *
+       * @param msg
+       */
+      private void queueMessage(Message msg) {
+         queue.add(msg);
+         processOut();
+         updateInterestOps();
+      }
+
+      /**
+       * Try to fill bbout from the message queue
+       */
+      private void processOut() {
+         // vérifier si bbout a suffisamment de place
+         while (!queue.isEmpty()) {
+            var msg = queue.remove();
+            var login = UTF.encode(msg.getLogin());
+            var actualMsg = UTF.encode(msg.getMessage());
+            var bbtmp = ByteBuffer.allocate(BUFFER_SIZE);
+            bbtmp.putInt(login.remaining()).put(login).putInt(actualMsg.remaining()).put(actualMsg).flip();
+            bbout.put(bbtmp);
+         }
       }
 
       /**
        * Update the interestOps of the key looking
        * only at values of the boolean closed and
-       * the ByteBuffer buff.
+       * of both ByteBuffers.
        * <p>
-       * The convention is that buff is in write-mode.
+       * The convention is that both buffers are in write-mode before the call
+       * to updateInterestOps and after the call.
+       * Also it is assumed that process has been be called just
+       * before updateInterestOps.
        */
+
       private void updateInterestOps() {
-         int newINterestOPs=0;
-         if (bb.hasRemaining()&&!closed){
-            newINterestOPs|=SelectionKey.OP_READ;
+         var newInterestOp = 0;
+         if (bbin.hasRemaining() && !closed) {
+            newInterestOp |= SelectionKey.OP_READ;
          }
-         if (bb.position()!=0){
-            newINterestOPs|=SelectionKey.OP_WRITE;
+         if (bbout.position() > 0) {
+            newInterestOp |= SelectionKey.OP_WRITE;
          }
-         if (newINterestOPs==0){
+         if (newInterestOp == 0) {
             silentlyClose();
+            return;
          } else {
-            key.interestOps(newINterestOPs);
+            key.interestOps(newInterestOp);
          }
-
-//         if (closed && bb.position() == 0) {
-//            silentlyClose();
-//         }
-//         if (closed && bb.position() != 0) {
-//            key.interestOps(SelectionKey.OP_WRITE);
-//         }
-//         if (bb.position() > BUFFER_SIZE / 2) {
-//            key.interestOps(SelectionKey.OP_WRITE);
-//         }
-//         if (bb.position() > 0){
-//            key.interestOps(SelectionKey.OP_READ | SelectionKey.OP_WRITE);
-//         } else {
-//            key.interestOps(SelectionKey.OP_READ);
-//         }
-      }
-
-      /**
-       * Performs the read action on sc
-       * <p>
-       * The convention is that buff is in write-mode before calling doRead
-       * and is in write-mode after calling doRead
-       *
-       * @throws IOException
-       */
-      private void doRead() throws IOException {
-         if (sc.read(bb) == -1) {
-            logger.info("Input stream closed");
-            closed = true;
-         }
-
-         updateInterestOps();
-      }
-
-      /**
-       * Performs the write action on sc
-       * <p>
-       * The convention is that buff is in write-mode before calling doWrite
-       * and is in write-mode after calling doWrite
-       *
-       * @throws IOException
-       */
-      private void doWrite() throws IOException {
-         bb.flip();
-         sc.write(bb);
-         bb.compact();
-         updateInterestOps();
       }
 
       private void silentlyClose() {
@@ -99,15 +122,51 @@ public class ServerEcho {
             // ignore exception
          }
       }
+
+      /**
+       * Performs the read action on sc
+       * <p>
+       * The convention is that both buffers are in write-mode before the call
+       * to doRead and after the call
+       *
+       * @throws IOException
+       */
+      private void doRead() throws IOException {
+         if (sc.read(bbin) == -1) {
+            logger.info("Input stream closed");
+            closed = true;
+            updateInterestOps();
+            return;
+         }
+         processIn();
+         updateInterestOps();
+      }
+
+      /**
+       * Performs the write action on sc
+       * <p>
+       * The convention is that both buffers are in write-mode before the call
+       * to doWrite and after the call
+       *
+       * @throws IOException
+       */
+
+      private void doWrite() throws IOException {
+         bbout.flip();
+         sc.write(bbout);
+         bbout.compact();
+         processOut();
+         updateInterestOps();
+      }
    }
 
    static private int BUFFER_SIZE = 1_024;
-   static private Logger logger = Logger.getLogger(ServerEcho.class.getName());
+   static private Logger logger = Logger.getLogger(ServerChaton.class.getName());
 
    private final ServerSocketChannel serverSocketChannel;
    private final Selector selector;
 
-   public ServerEcho(int port) throws IOException {
+   public ServerChaton(int port) throws IOException {
       serverSocketChannel = ServerSocketChannel.open();
       serverSocketChannel.bind(new InetSocketAddress(port));
       selector = Selector.open();
@@ -159,7 +218,7 @@ public class ServerEcho {
       }
       sc.configureBlocking(false);
       var clientKey = sc.register(selector, SelectionKey.OP_READ);
-      clientKey.attach(new Context(clientKey));
+      clientKey.attach(new Context(this, clientKey));
    }
 
    private void silentlyClose(SelectionKey key) {
@@ -171,16 +230,31 @@ public class ServerEcho {
       }
    }
 
+   /**
+    * Add a message to all connected clients queue
+    *
+    * @param msg
+    */
+   private void broadcast(Message msg) {
+      var keys = selector.keys();
+      for (var key : keys) {
+         if (key.attachment() != null) {
+            var context = (Context) key.attachment();
+            context.queueMessage(msg);
+         }
+      }
+   }
+
    public static void main(String[] args) throws NumberFormatException, IOException {
       if (args.length != 1) {
          usage();
          return;
       }
-      new ServerEcho(Integer.parseInt(args[0])).launch();
+      new ServerChaton(Integer.parseInt(args[0])).launch();
    }
 
    private static void usage() {
-      System.out.println("Usage : ServerEcho port");
+      System.out.println("Usage : ServerSumBetter port");
    }
 
    /***

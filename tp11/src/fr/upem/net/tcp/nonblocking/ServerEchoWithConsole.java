@@ -4,18 +4,26 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
-import java.nio.channels.*;
+import java.nio.channels.Channel;
+import java.nio.channels.SelectableChannel;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
 import java.util.ArrayList;
+import java.util.Scanner;
 import java.util.Set;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-public class ServerEcho {
+public class ServerEchoWithConsole {
 
    static private class Context {
       final private SelectionKey key;
       final private SocketChannel sc;
       final private ByteBuffer bb = ByteBuffer.allocate(BUFFER_SIZE);
+
       private boolean closed = false;
 
       private Context(SelectionKey key) {
@@ -31,14 +39,14 @@ public class ServerEcho {
        * The convention is that buff is in write-mode.
        */
       private void updateInterestOps() {
-         int newINterestOPs=0;
-         if (bb.hasRemaining()&&!closed){
-            newINterestOPs|=SelectionKey.OP_READ;
+         int newINterestOPs = 0;
+         if (bb.hasRemaining() && !closed) {
+            newINterestOPs |= SelectionKey.OP_READ;
          }
-         if (bb.position()!=0){
-            newINterestOPs|=SelectionKey.OP_WRITE;
+         if (bb.position() != 0) {
+            newINterestOPs |= SelectionKey.OP_WRITE;
          }
-         if (newINterestOPs==0){
+         if (newINterestOPs == 0) {
             silentlyClose();
          } else {
             key.interestOps(newINterestOPs);
@@ -102,29 +110,98 @@ public class ServerEcho {
    }
 
    static private int BUFFER_SIZE = 1_024;
-   static private Logger logger = Logger.getLogger(ServerEcho.class.getName());
+   static private Logger logger = Logger.getLogger(ServerEchoWithConsole.class.getName());
 
    private final ServerSocketChannel serverSocketChannel;
    private final Selector selector;
+   private final ArrayBlockingQueue<String> commandQueue = new ArrayBlockingQueue<>(10);
+   private final Thread console;
+   private final Thread server;
 
-   public ServerEcho(int port) throws IOException {
+   public ServerEchoWithConsole(int port) throws IOException {
       serverSocketChannel = ServerSocketChannel.open();
       serverSocketChannel.bind(new InetSocketAddress(port));
       selector = Selector.open();
+      this.console = new Thread(this::consoleRun);
+      server = new Thread(this::serverRun);
    }
 
-   public void launch() throws IOException {
-      serverSocketChannel.configureBlocking(false);
-      serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
+   private void serverRun() {
       while (!Thread.interrupted()) {
          printKeys(); // for debug
          System.out.println("Starting select");
          try {
             selector.select(this::treatKey);
-         } catch (UncheckedIOException tunneled) {
-            throw tunneled.getCause();
+         } catch (IOException e) {
+            throw new UncheckedIOException(e);
          }
+         processCommands();
+
          System.out.println("Select finished");
+      }
+   }
+
+   private void consoleRun() {
+      try {
+         var scan = new Scanner(System.in);
+         while (scan.hasNextLine()) {
+            var msg = scan.nextLine();
+            sendCommand(msg);
+         }
+      } catch (InterruptedException e) {
+         logger.info("Console thread has been interrupted");
+      } finally {
+         logger.info("Console thread stopping");
+      }
+   }
+
+   private void sendCommand(String msg) throws InterruptedException {
+      commandQueue.put(msg);
+      selector.wakeup();
+   }
+
+   public void launch() throws IOException {
+      serverSocketChannel.configureBlocking(false);
+      serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
+      console.start();
+
+      server.start();
+   }
+
+   private void processCommands() {
+      while (!commandQueue.isEmpty()) {
+         var msg = commandQueue.remove();
+         switch (msg) {
+            case "INFO":
+               var counter = 0;
+               for (var key : selector.keys()) {
+                  if (key.attachment() != null) {
+                     counter++;
+                  }
+               }
+               logger.info("INFO: " + counter + " clients connected");
+               break;
+            case "SHUTDOWN":
+               logger.info("SHUTDOWN: No new clients");
+               try {
+                  serverSocketChannel.close();
+               } catch (IOException e) {
+                  throw new UncheckedIOException(e);
+               }
+               break;
+            case "SHUTDOWNOW":
+               logger.info("SHUTDOWNNOW: Stop the server");
+               for (SelectionKey key : selector.selectedKeys()) {
+                  var context = (Context) key.attachment();
+                  context.silentlyClose();
+               }
+               server.interrupt();
+               break;
+            default:
+               logger.info("UNKNOWN COMMAND");
+               break;
+         }
+//            uniqueContext.queueMessage(bb.flip());
       }
    }
 
@@ -176,7 +253,7 @@ public class ServerEcho {
          usage();
          return;
       }
-      new ServerEcho(Integer.parseInt(args[0])).launch();
+      new ServerEchoWithConsole(Integer.parseInt(args[0])).launch();
    }
 
    private static void usage() {
